@@ -28,6 +28,9 @@
 #include "unicode.h"
 #include "unused.h"
 
+const int minibuffer_height = 1;
+const int statusbar_height = 1;
+
 // POSIX 2001 compliant alternative to strdup
 char *stringdup(const char *s) {
 	size_t len = strlen(s) + 1; // +1 for the null terminator
@@ -720,8 +723,7 @@ void editorKillLine(struct editorBuffer *bufr) {
 		row->size = bufr->cx;
 		editorUpdateRow(row);
 		bufr->dirty = 1;
-		bufr->markx = -1;
-		bufr->marky = -1;
+		editorClearMark(bufr);
 	}
 }
 
@@ -887,18 +889,19 @@ void abFree(struct abuf *ab) {
 }
 
 /*** output ***/
+
 void editorSetScxScy(struct editorWindow *win) {
 	struct editorBuffer *buf = win->buf;
 	erow *row = (buf->cy >= buf->numrows) ? NULL : &buf->row[buf->cy];
-	int i;
 
 	win->scy = 0;
 	win->scx = 0;
 
 	if (!buf->truncate_lines) {
-		for (i = win->rowoff; i < buf->cy; i++) {
-			win->scy += (buf->row[i].renderwidth / E.screencols);
-			win->scy++;
+		// Calculate vertical position for wrapped lines
+		for (int i = win->rowoff; i < buf->cy; i++) {
+			win->scy +=
+				(buf->row[i].renderwidth / E.screencols) + 1;
 		}
 	} else {
 		win->scy = buf->cy - win->rowoff;
@@ -908,33 +911,34 @@ void editorSetScxScy(struct editorWindow *win) {
 		return;
 	}
 
-	if (buf->truncate_lines) {
-		int current_width = 0;
-		for (int j = 0; j < buf->cx; j++) {
-			if (row->chars[j] == '\t') {
-				current_width +=
-					(EMSYS_TAB_STOP - 1) -
-					(current_width % EMSYS_TAB_STOP);
-			}
-			current_width++;
+	int current_width = 0;
+	for (int j = 0; j < buf->cx;) {
+		int char_width;
+		if (row->chars[j] == '\t') {
+			char_width = EMSYS_TAB_STOP -
+				     (current_width % EMSYS_TAB_STOP);
+		} else {
+			char_width = charInStringWidth(row->chars, j);
 		}
-		win->scx = current_width - win->coloff;
-	} else {
-		for (i = 0; i < buf->cx; i += (utf8_nBytes(row->chars[i]))) {
-			if (row->chars[i] == '\t') {
-				win->scx += (EMSYS_TAB_STOP - 1) -
-					    (win->scx % EMSYS_TAB_STOP);
-				win->scx++;
-			} else {
-				win->scx += charInStringWidth(row->chars, i);
-			}
+
+		if (buf->truncate_lines) {
+			current_width += char_width;
+		} else {
+			win->scx += char_width;
 			if (win->scx >= E.screencols) {
 				win->scx = 0;
 				win->scy++;
 			}
 		}
+
+		j += utf8_nBytes(row->chars[j]);
 	}
 
+	if (buf->truncate_lines) {
+		win->scx = current_width - win->coloff;
+	}
+
+	// Ensure cursor is within window bounds
 	if (win->scy >= win->height)
 		win->scy = win->height - 1;
 	if (win->scx >= E.screencols)
@@ -945,8 +949,8 @@ void editorScroll() {
 	struct editorWindow *win = E.windows[windowFocusedIdx(&E)];
 	struct editorBuffer *buf = win->buf;
 
-	if (buf->cy >= buf->numrows) {
-		buf->cy = buf->numrows > 0 ? buf->numrows - 1 : 0;
+	if (buf->cy + 1 > buf->numrows) {
+		buf->cy = buf->numrows;
 		buf->cx = 0;
 	} else if (buf->cx > buf->row[buf->cy].size) {
 		buf->cx = buf->row[buf->cy].size;
@@ -983,9 +987,25 @@ void editorScroll() {
 void editorDrawRows(struct editorWindow *win, struct abuf *ab, int screenrows,
 		    int screencols) {
 	struct editorBuffer *bufr = win->buf;
-	int y;
-	int filerow = win->rowoff;
-	for (y = 0; y < screenrows; y++) {
+	int markActive = (bufr->markx != -1 && bufr->marky != -1);
+	int markStartY, markEndY, markStartX, markEndX;
+
+	if (markActive) {
+		if (bufr->marky < bufr->cy ||
+		    (bufr->marky == bufr->cy && bufr->markx < win->scx)) {
+			markStartY = bufr->marky;
+			markEndY = bufr->cy;
+			markStartX = bufr->markx;
+			markEndX = win->scx;
+		} else {
+			markStartY = bufr->cy;
+			markEndY = bufr->marky;
+			markStartX = win->scx;
+			markEndX = bufr->markx;
+		}
+	}
+
+	for (int y = 0, filerow = win->rowoff; y < screenrows; y++, filerow++) {
 		if (filerow >= bufr->numrows) {
 			abAppend(ab, CSI "34m~" CSI "0m", 10);
 		} else {
@@ -996,46 +1016,50 @@ void editorDrawRows(struct editorWindow *win, struct abuf *ab, int screenrows,
 			if (len > screencols)
 				len = screencols;
 
-			int j = win->coloff;
-			int col = 0;
-			while (col < len && j < row->rsize) {
+			int inHighlight = 0;
+			for (int j = win->coloff, col = 0;
+			     col < len && j < row->rsize; j++) {
+				int withinMarkRegion =
+					markActive &&
+					((filerow > markStartY &&
+					  filerow < markEndY) ||
+					 (filerow == markStartY &&
+					  filerow == markEndY &&
+					  j >= markStartX && j < markEndX) ||
+					 (filerow == markStartY &&
+					  filerow != markEndY &&
+					  j >= markStartX) ||
+					 (filerow == markEndY &&
+					  filerow != markStartY &&
+					  j < markEndX));
+
+				if (withinMarkRegion != inHighlight) {
+					abAppend(ab,
+						 withinMarkRegion ? "\x1b[7m" :
+								    "\x1b[0m",
+						 4);
+					inHighlight = withinMarkRegion;
+				}
+
 				if (row->render[j] == '\t') {
-					int next_tab_stop =
-						(col + 8) - (col % 8);
-					while (col < next_tab_stop &&
-					       col < len) {
+					int spaces = EMSYS_TAB_STOP -
+						     (col % EMSYS_TAB_STOP);
+					while (spaces > 0 && col < len) {
 						abAppend(ab, " ", 1);
 						col++;
+						spaces--;
 					}
-					j++;
 				} else {
 					abAppend(ab, &row->render[j], 1);
 					col++;
-					j++;
-				}
-
-				if (col >= screencols) {
-					if (bufr->truncate_lines) {
-						break; // Stop if truncating lines
-					} else if (y < screenrows - 1) {
-						// Handle line wrapping
-						abAppend(ab, "\r\n", 2);
-						abAppend(
-							ab, "\x1b[K",
-							3); // Clear the new line
-						col = 0;
-						y++;
-					} else {
-						break; // No more screen space
-					}
 				}
 			}
+			if (inHighlight)
+				abAppend(ab, "\x1b[0m", 4);
 		}
 		abAppend(ab, "\x1b[K", 3); // Clear to the end of the line
-		if (y < screenrows - 1) {
-			abAppend(ab, "\r\n", 2); // Move to the next line
-		}
-		filerow++;
+		if (y < screenrows - 1)
+			abAppend(ab, "\r\n", 2);
 	}
 }
 
@@ -1159,28 +1183,25 @@ void editorRefreshScreen() {
 	abAppend(&ab, "\x1b[H", 3);    // Move cursor to top-left corner
 
 	int focusedIdx = windowFocusedIdx(&E);
-	int minibuffer_height = 1;
-	int available_height = E.screenrows - minibuffer_height;
-	int base_window_size = available_height / E.nwindows;
-	int remaining_space = available_height % E.nwindows;
 
 	int cumulative_height = 0;
 
 	for (int i = 0; i < E.nwindows; i++) {
 		struct editorWindow *win = E.windows[i];
-		win->height = base_window_size + (i < remaining_space ? 1 : 0);
+		win->height = (E.screenrows - minibuffer_height) / E.nwindows -
+			      statusbar_height;
 
 		if (win->focused) {
 			editorScroll();
 		}
 
-		// Draw window content (leaving one line for status bar)
-		editorDrawRows(win, &ab, win->height - 1, E.screencols);
+		editorDrawRows(win, &ab, win->height, E.screencols);
 
 		// Draw status bar
-		editorDrawStatusBar(win, &ab, cumulative_height + win->height);
+		editorDrawStatusBar(win, &ab,
+				    cumulative_height + win->height + 1);
 
-		cumulative_height += win->height;
+		cumulative_height += win->height + statusbar_height;
 	}
 
 	editorDrawMinibuffer(&ab);
@@ -1196,8 +1217,8 @@ void editorRefreshScreen() {
 	}
 
 	// Ensure cursor doesn't go beyond the window's bottom
-	if (cursor_y > cumulative_height - 1) {
-		cursor_y = cumulative_height - 1;
+	if (cursor_y > cumulative_height) {
+		cursor_y = cumulative_height - statusbar_height;
 	}
 
 	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", cursor_y,
@@ -1257,7 +1278,7 @@ void editorResizeScreen(int UNUSED(sig)) {
 }
 
 void editorRecenter(struct editorWindow *win) {
-	win->rowoff = win->scy - (win->height / 2);
+	win->rowoff = win->buf->cy - (win->height / 2);
 	if (win->rowoff < 0) {
 		win->rowoff = 0;
 	}
@@ -2014,42 +2035,41 @@ void editorProcessKeypress(int c) {
 	{
 
 		for (int i = 0; i < rept; i++) {
-			// Move cursor up by window height
-			bufr->cy -= win->height;
-
-			// If we've gone past the start of the buffer, set to first line
-			if (bufr->cy < 0) {
-				bufr->cy = 0;
+			int overlap = 2;
+			// Move the cursor as needed
+			bufr->cx = 0;
+			if (bufr->cy >= win->rowoff + overlap) {
+				bufr->cy = win->rowoff + 1;
 			}
+
+			// Move the window offset
+			win->rowoff -= (win->height - overlap);
+			if (win->rowoff < 0)
+				win->rowoff = 0;
 		}
 
-		// Move cursor to beginning of line
-		bufr->cx = 0;
-
-		// Force scroll update
 		editorScroll();
 	} break;
 	case PAGE_DOWN:
 #ifndef EMSYS_CUA
 	case CTRL('v'):
 #endif //EMSYS_CUA
-	{
+
 		for (int i = 0; i < rept; i++) {
-			// Move cursor down by window height
-			bufr->cy += win->height;
-
-			// If we've gone past the end of the buffer, set to last line
-			if (bufr->cy >= bufr->numrows) {
-				bufr->cy = bufr->numrows - 1;
+			int overlap = 2;
+			// move the cursor as needed
+			bufr->cx = 0;
+			if (bufr->cy < win->rowoff + win->height - overlap) {
+				bufr->cy = win->rowoff + win->height - overlap;
 			}
+			// Move the window offset
+			win->rowoff += (win->height - overlap);
+			if (win->rowoff < 0)
+				win->rowoff = 0;
+
+			editorScroll();
 		}
-
-		// Move cursor to beginning of line
-		bufr->cx = 0;
-
-		// Force scroll update
-		editorScroll();
-	} break;
+		break;
 	case BEG_OF_FILE:
 		bufr->cy = 0;
 		bufr->cx = 0;
@@ -2060,9 +2080,9 @@ void editorProcessKeypress(int c) {
 		struct editorBuffer *buf = win->buf;
 
 		editorSetStatusMessage(
-			"(buf->cx%d,cy%d) (win->scx%d,scy%d) win->height=%d screenrows=%d, screencols=%d",
+			"bufcx%d,cy%d scx%d,scy%d winheight=%d screenrows=%d numrows%d rowoff%d",
 			buf->cx, buf->cy, win->scx, win->scy, win->height,
-			E.screenrows, E.screencols);
+			E.screenrows, bufr->numrows, win->rowoff);
 	} break;
 	case END_OF_FILE:
 		bufr->cy = bufr->numrows;
@@ -2092,9 +2112,7 @@ void editorProcessKeypress(int c) {
 #ifdef EMSYS_CUA
 	case CUT:
 		editorKillRegion(&E, bufr);
-		// unmark region
-		bufr->markx = -1;
-		bufr->marky = -1;
+		editorClearMark(bufr);
 		break;
 #endif //EMSYS_CUA
 	case SAVE:
@@ -2102,13 +2120,12 @@ void editorProcessKeypress(int c) {
 		break;
 	case COPY:
 		editorCopyRegion(&E, bufr);
+		editorClearMark(bufr);
 		break;
 #ifdef EMSYS_CUA
 	case CTRL('C'):
 		editorCopyRegion(&E, bufr);
-		// unmark region
-		bufr->markx = -1;
-		bufr->marky = -1;
+		editorClearMark(bufr);
 		break;
 #endif //EMSYS_CUA
 	case CTRL('@'):
@@ -2126,6 +2143,7 @@ void editorProcessKeypress(int c) {
 		for (int i = 0; i < rept; i++) {
 			editorKillRegion(&E, bufr);
 		}
+		editorClearMark(bufr);
 		break;
 	case CTRL('i'):
 		editorIndent(bufr, rept);
@@ -2306,9 +2324,9 @@ void editorProcessKeypress(int c) {
 		E.windows[E.nwindows - 1]->cy = E.focusBuf->cy;
 		E.windows[E.nwindows - 1]->rowoff = 0;
 		E.windows[E.nwindows - 1]->coloff = 0;
-		E.windows[E.nwindows - 1]->height = E.screenrows / E.nwindows;
-		E.windows[E.nwindows - 1]->buf->truncate_lines = 0;
-		E.windows[E.nwindows - 1]->buf->word_wrap = 0;
+		E.windows[E.nwindows - 1]->height =
+			(E.screenrows - minibuffer_height) / E.nwindows -
+			statusbar_height;
 		break;
 
 	case DESTROY_WINDOW:
@@ -2353,6 +2371,7 @@ void editorProcessKeypress(int c) {
 		E.nwindows = 1;
 		free(E.windows);
 		E.windows = windows;
+		editorRefreshScreen();
 		break;
 	case KILL_BUFFER:
 		// Bypass confirmation for special buffers
@@ -2524,11 +2543,7 @@ void editorProcessKeypress(int c) {
 		break;
 
 	case CTRL('g'):
-		/* Expected behavior */
-#ifdef EMSYS_CUA
-		bufr->markx = -1;
-		bufr->marky = -1;
-#endif //EMSYS_CUA
+		editorClearMark(bufr);
 		editorSetStatusMessage("Quit");
 		break;
 
@@ -2579,10 +2594,12 @@ void editorProcessKeypress(int c) {
 
 	case COPY_RECT:
 		editorCopyRectangle(&E, bufr);
+		editorClearMark(bufr);
 		break;
 
 	case KILL_RECT:
 		editorKillRectangle(&E, bufr);
+		editorClearMark(bufr);
 		break;
 
 	case YANK_RECT:
@@ -2637,6 +2654,7 @@ struct editorBuffer *newBuffer() {
 	ret->next = NULL;
 	ret->uarg = 0;
 	ret->uarg_active = 0;
+	ret->truncate_lines = 0;
 	return ret;
 }
 
