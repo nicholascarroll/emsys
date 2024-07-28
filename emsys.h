@@ -237,6 +237,7 @@ struct editorConfig {
 	struct editorCommand *cmd;
 	int cmd_count;
 	struct editorRegister registers[127];
+	struct editorBuffer *lastVisitedBuffer;
 };
 
 /*** prototypes ***/
