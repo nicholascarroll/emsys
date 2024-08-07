@@ -294,7 +294,10 @@ ESC_UNKNOWN:;
 			strcat(seqR, buf);
 		}
 		editorSetStatusMessage("Unknown command M-%s", seqR);
-		return 033;
+		// Discard the rest of the escape sequence
+		char discard[32];
+                read(STDIN_FILENO, discard, sizeof(discard));
+		//return 033;
 	} else if (c == CTRL('x')) {
 		/* Welcome to Emacs! */
 #ifdef EMSYS_CUA
@@ -441,7 +444,10 @@ CX_UNKNOWN:;
 			strcat(seqR, buf);
 		}
 		editorSetStatusMessage("Unknown command C-x %s", seqR);
-		return CTRL('x');
+                // Discard the rest of the escape sequence
+                char discard[32];
+                read(STDIN_FILENO, discard, sizeof(discard));
+		//return CTRL('x');
 	} else if (c == CTRL('p')) {
 		return ARROW_UP;
 	} else if (c == CTRL('n')) {
