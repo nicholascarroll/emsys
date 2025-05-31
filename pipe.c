@@ -17,6 +17,76 @@ static char *buf;
 
 static uint8_t *transformerPipeCmd(uint8_t *input) {
 	int bsiz = BUFSIZ + 1;
+#ifdef __ANDROID__
+	char temp_input_file[] = "/tmp/emsys_pipe_input_XXXXXX";
+	char temp_output_file[] = "/tmp/emsys_pipe_output_XXXXXX";
+
+	int input_fd = mkstemp(temp_input_file);
+	if (input_fd == -1) {
+		die("mkstemp input");
+	}
+
+	int output_fd = mkstemp(temp_output_file);
+	if (output_fd == -1) {
+		close(input_fd);
+		unlink(temp_input_file);
+		die("mkstemp output");
+	}
+
+	FILE *input_file = fdopen(input_fd, "w");
+	if (!input_file) {
+		close(input_fd);
+		close(output_fd);
+		unlink(temp_input_file);
+		unlink(temp_output_file);
+		die("fdopen input");
+	}
+
+	for (int i = 0; input[i]; i++) {
+		fputc(input[i], input_file);
+	}
+	fclose(input_file);
+
+	char full_cmd[2048];
+	snprintf(full_cmd, sizeof(full_cmd), "%s < %s > %s", (char *)cmd,
+		 temp_input_file, temp_output_file);
+
+	int exit_code = system(full_cmd);
+	if (exit_code != 0) {
+		close(output_fd);
+		unlink(temp_input_file);
+		unlink(temp_output_file);
+		editorSetStatusMessage("Command failed with exit code %d",
+				       exit_code);
+		return (uint8_t *)buf;
+	}
+
+	FILE *output_file = fdopen(output_fd, "r");
+	if (!output_file) {
+		close(output_fd);
+		unlink(temp_input_file);
+		unlink(temp_output_file);
+		die("fdopen output");
+	}
+
+	int c = fgetc(output_file);
+	int i = 0;
+	while (c != EOF) {
+		buf[i++] = c;
+		buf[i] = 0;
+		if (i >= bsiz - 10) {
+			bsiz <<= 1;
+			buf = realloc(buf, bsiz);
+		}
+		c = fgetc(output_file);
+	}
+	editorSetStatusMessage("Read %d bytes", i);
+
+	fclose(output_file);
+	unlink(temp_input_file);
+	unlink(temp_output_file);
+	return (uint8_t *)buf;
+#else
 	/* Using sh -c lets us use pipes and stuff and takes care of quoting.
 	 * NOTE: This allows command injection by design - users can chain commands
 	 * with ; && || etc. This is intentional to support complex shell pipelines. */
@@ -57,6 +127,7 @@ static uint8_t *transformerPipeCmd(uint8_t *input) {
 	/* Cleanup & return */
 	subprocess_destroy(&subprocess);
 	return (uint8_t *)buf;
+#endif
 }
 
 uint8_t *editorPipe(struct editorConfig *ed, struct editorBuffer *bf) {
