@@ -4,7 +4,7 @@ VERSION?=git-`git rev-parse --short HEAD`
 BINDIR=$(PREFIX)/bin
 MANDIR=$(PREFIX)/man/man1
 OBJECTS=main.o wcwidth.o unicode.o row.o region.o undo.o transform.o bound.o command.o find.o pipe.o tab.o register.o keybindings.o compat.o terminal.o display.o
-CFLAGS+=-std=c99 -D_POSIX_C_SOURCE=200112L -Wall -Wno-pointer-sign -fstack-protector-strong -D_FORTIFY_SOURCE=2 -DEMSYS_BUILD_DATE=\"`date '+%Y-%m-%dT%H:%M:%S%z'`\" -DEMSYS_VERSION=\"$(VERSION)\"
+CFLAGS+=-std=c99 -D_POSIX_C_SOURCE=200112L -Wall -pedantic -Wno-pointer-sign -fstack-protector-strong -D_FORTIFY_SOURCE=2 -DEMSYS_BUILD_DATE=\"`date '+%Y-%m-%dT%H:%M:%S%z'`\" -DEMSYS_VERSION=\"$(VERSION)\"
 
 # Platform Detection: 3-Platform Strategy
 # 
@@ -105,10 +105,41 @@ test-platforms:
 	@echo "CFLAGS: $(CFLAGS)"
 	@echo "LDFLAGS: $(LDFLAGS)"
 
+# Simplified test objects
+TEST_OBJS = tests/test_main.o tests/test_helpers.o tests/test_stubs.o
+TEST_BIN = run_tests
+# Objects without main.o for test builds
+TEST_LINK_OBJS = row.o unicode.o wcwidth.o transform.o bound.o
+
+test: $(TEST_LINK_OBJS) $(TEST_OBJS)
+	$(CC) -g -O0 -o $(TEST_BIN) $^ $(LDFLAGS)
+	./$(TEST_BIN)
+
+$(TEST_BIN): $(TEST_LINK_OBJS) $(TEST_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+tests/%.o: tests/%.c
+	$(CC) -c -o $@ $< $(CFLAGS) -I.
+
+# Coverage analysis
+coverage: clean
+	$(CC) $(CFLAGS) --coverage -c $(TEST_LINK_OBJS:.o=.c)
+	$(CC) $(CFLAGS) --coverage -I. -c -o tests/test_helpers.o tests/test_helpers.c
+	$(CC) $(CFLAGS) --coverage -I. -c -o tests/test_main.o tests/test_main.c
+	$(CC) $(CFLAGS) --coverage -I. -c -o tests/test_stubs.o tests/test_stubs.c
+	$(CC) --coverage -o $(TEST_BIN) $(TEST_LINK_OBJS) tests/test_helpers.o tests/test_main.o tests/test_stubs.o
+	./$(TEST_BIN)
+	gcov *.c > coverage_report.txt
+
+clean-tests:
+	rm -f $(TEST_BIN) tests/*.o tests/generated/*.o
+	rm -f *.gcno *.gcda *.gcov
+
 clean:
 	rm -rf *.o
 	rm -rf *.exe
 	rm -rf $(PROGNAME)
 	rm -rf unicodetest
+	$(MAKE) clean-tests
 
-.PHONY: all debug optimized test-platforms clean install format
+.PHONY: all debug optimized test-platforms clean clean-tests test coverage install format
