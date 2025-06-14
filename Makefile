@@ -3,7 +3,7 @@ PREFIX=/usr/local
 VERSION?=$(shell git rev-parse --short HEAD 2>/dev/null | sed 's/^/git-/' || echo "")
 BINDIR=$(PREFIX)/bin
 MANDIR=$(PREFIX)/man/man1
-OBJECTS=main.o wcwidth.o unicode.o row.o region.o undo.o transform.o bound.o command.o find.o pipe.o tab.o register.o keybindings.o compat.o terminal.o display.o
+OBJECTS=main.o wcwidth.o unicode.o row.o region.o undo.o transform.o bound.o command.o find.o pipe.o tab.o register.o keybindings.o compat.o terminal.o display.o editor.o fileio.o
 CFLAGS+=-std=c99 -D_POSIX_C_SOURCE=200112L -Wall -Wno-pointer-sign -fstack-protector-strong -D_FORTIFY_SOURCE=2 -DEMSYS_BUILD_DATE=\"`date '+%Y-%m-%dT%H:%M:%S%z'`\" $(if $(VERSION),-DEMSYS_VERSION=\"$(VERSION)\")
 
 # Platform Detection: 3-Platform Strategy
