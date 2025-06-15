@@ -96,6 +96,12 @@ void initEditor() {
 }
 
 int main(int argc, char *argv[]) {
+	// Check for --version flag before entering raw mode
+	if (argc >= 2 && strcmp(argv[1], "--version") == 0) {
+		printf("emsys %s\n", EMSYS_VERSION);
+		return 0;
+	}
+	
 	enableRawMode();
 	initEditor();
 	E.firstBuf = newBuffer();
