@@ -123,7 +123,15 @@ void editorOpen(struct editorBuffer *bufr, char *filename) {
 				editorSetStatusMessage(
 					"Loading... %3d%% (%6.0f lines/sec, C-g to cancel)",
 					percent, rate);
-				refreshScreen();
+
+				if (E.minibuf != NULL) {
+					refreshScreen();
+				} else {
+					fprintf(stderr,
+						"\rLoading... %3d%% (%6.0f lines/sec, C-g to cancel)",
+						percent, rate);
+					fflush(stderr);
+				}
 
 				if (check_for_interrupt()) {
 					free(line);
@@ -144,6 +152,12 @@ void editorOpen(struct editorBuffer *bufr, char *filename) {
 	free(line);
 	fclose(fp);
 	bufr->dirty = 0;
+
+	/* Clear the progress line if we were showing console output */
+	if (E.minibuf == NULL && bufr->numrows > 1000) {
+		fprintf(stderr, "\r\033[K"); /* Clear line */
+		fflush(stderr);
+	}
 }
 
 void editorRevert(struct editorConfig *ed, struct editorBuffer *buf) {
