@@ -16,6 +16,7 @@
 #include <limits.h>
 
 extern struct editorConfig E;
+extern void updateRow(erow *row);
 
 const int minibuffer_height = 1;
 const int statusbar_height = 1;
@@ -468,6 +469,9 @@ void drawRows(struct editorWindow *win, struct abuf *ab, int screenrows,
 			abAppend(ab, CSI "34m~" CSI "0m", 10);
 		} else {
 			erow *row = &buf->row[filerow];
+			if (!row->render_valid) {
+				updateRow(row);
+			}
 			if (buf->truncate_lines) {
 				// Truncated mode with visual marking
 				renderLineWithHighlighting(

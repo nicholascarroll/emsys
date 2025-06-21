@@ -70,6 +70,10 @@ int calculateLineWidth(erow *row) {
 		return row->cached_width;
 	}
 
+	if (!row->render_valid) {
+		updateRow(row);
+	}
+
 	int screen_x = 0;
 	for (int i = 0; i < row->size;) {
 		screen_x = nextScreenX(row->chars, &i, screen_x);
@@ -189,21 +193,30 @@ void updateRow(erow *row) {
 	}
 	row->render[idx] = 0;
 	row->rsize = idx;
+	row->render_valid = 1;
 }
 
 void editorInsertRow(struct editorBuffer *bufr, int at, char *s, size_t len) {
 	if (at < 0 || at > bufr->numrows)
 		return;
 
-	/* Limit line length to prevent memory issues */
-	const size_t MAX_LINE_LENGTH = 1000000; /* 1MB per line */
+	const size_t MAX_LINE_LENGTH = 1000000;
 	if (len > MAX_LINE_LENGTH) {
 		len = MAX_LINE_LENGTH;
 	}
 
-	bufr->row = xrealloc(bufr->row, sizeof(erow) * (bufr->numrows + 1));
-	memmove(&bufr->row[at + 1], &bufr->row[at],
-		sizeof(erow) * (bufr->numrows - at));
+	if (bufr->numrows >= bufr->rowcap) {
+		int new_cap = bufr->rowcap ? bufr->rowcap * 2 : 16;
+		bufr->row = xrealloc(bufr->row, sizeof(erow) * new_cap);
+		memset(&bufr->row[bufr->rowcap], 0,
+		       sizeof(erow) * (new_cap - bufr->rowcap));
+		bufr->rowcap = new_cap;
+	}
+
+	if (at < bufr->numrows) {
+		memmove(&bufr->row[at + 1], &bufr->row[at],
+			sizeof(erow) * (bufr->numrows - at));
+	}
 
 	bufr->row[at].size = len;
 	bufr->row[at].chars = xmalloc(len + 1);
@@ -214,11 +227,13 @@ void editorInsertRow(struct editorBuffer *bufr, int at, char *s, size_t len) {
 	bufr->row[at].render = NULL;
 	bufr->row[at].cached_width = 0;
 	bufr->row[at].width_valid = 0;
-	updateRow(&bufr->row[at]);
+	bufr->row[at].render_valid = 0;
 
 	bufr->numrows++;
 	bufr->dirty = 1;
-	invalidateScreenCache(bufr);
+	if (at < bufr->numrows - 1 || bufr->screen_line_cache_valid) {
+		invalidateScreenCache(bufr);
+	}
 }
 
 void freeRow(erow *row) {
@@ -246,8 +261,7 @@ void rowInsertChar(struct editorBuffer *bufr, erow *row, int at, int c) {
 	if (at < 0 || at > row->size)
 		at = row->size;
 
-	/* Prevent lines from growing too large */
-	const size_t MAX_LINE_LENGTH = 1000000; /* 1MB per line */
+	const size_t MAX_LINE_LENGTH = 1000000;
 	if ((size_t)row->size >= MAX_LINE_LENGTH) {
 		return;
 	}
@@ -256,7 +270,7 @@ void rowInsertChar(struct editorBuffer *bufr, erow *row, int at, int c) {
 	memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
 	row->size++;
 	row->chars[at] = c;
-	updateRow(row);
+	row->render_valid = 0;
 	bufr->dirty = 1;
 	row->width_valid = 0;
 	invalidateScreenCache(bufr);
@@ -271,7 +285,7 @@ void editorRowInsertUnicode(struct editorConfig *ed, struct editorBuffer *bufr,
 		row->size - at + 1);
 	row->size += ed->nunicode;
 	memcpy(&row->chars[at], ed->unicode, ed->nunicode);
-	updateRow(row);
+	row->render_valid = 0;
 	bufr->dirty = 1;
 }
 
@@ -281,7 +295,7 @@ void rowAppendString(struct editorBuffer *bufr, erow *row, char *s,
 	memcpy(&row->chars[row->size], s, len);
 	row->size += len;
 	row->chars[row->size] = '\0';
-	updateRow(row);
+	row->render_valid = 0;
 	bufr->dirty = 1;
 }
 
@@ -292,7 +306,7 @@ void rowDelChar(struct editorBuffer *bufr, erow *row, int at) {
 	memmove(&row->chars[at], &row->chars[at + size],
 		row->size - ((at + size) - 1));
 	row->size -= size;
-	updateRow(row);
+	row->render_valid = 0;
 	bufr->dirty = 1;
 }
 
@@ -304,6 +318,7 @@ struct editorBuffer *newBuffer() {
 	ret->cx = 0;
 	ret->cy = 0;
 	ret->numrows = 0;
+	ret->rowcap = 0;
 	ret->row = NULL;
 	ret->filename = NULL;
 	ret->query = NULL;
@@ -326,12 +341,16 @@ void destroyBuffer(struct editorBuffer *buf) {
 	clearUndosAndRedos(buf);
 	free(buf->filename);
 	free(buf->screen_line_start);
+	for (int i = 0; i < buf->numrows; i++) {
+		freeRow(&buf->row[i]);
+	}
+	free(buf->row);
 	free(buf);
 }
 
 void editorUpdateBuffer(struct editorBuffer *buf) {
 	for (int i = 0; i < buf->numrows; i++) {
-		updateRow(&buf->row[i]);
+		buf->row[i].render_valid = 0;
 	}
 }
 

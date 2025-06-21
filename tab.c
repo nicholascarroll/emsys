@@ -483,7 +483,7 @@ COMPLETE_WORD_DONE:;
 	       completelen);
 	row->size += completelen;
 	row->chars[row->size] = 0;
-	updateRow(row);
+	row->render_valid = 0;
 
 	editorSetStatusMessage("Expanded %.30s to %.30s", word,
 			       candidates[sel]);

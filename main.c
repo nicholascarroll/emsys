@@ -106,13 +106,6 @@ int main(int argc, char *argv[]) {
 			struct editorBuffer *newBuf = newBuffer();
 			editorOpen(newBuf, argv[i]);
 
-			/* Check if load was cancelled */
-			if (newBuf->filename == NULL) {
-				/* Load was cancelled, skip this file */
-				destroyBuffer(newBuf);
-				continue;
-			}
-
 			newBuf->next = E.headbuf;
 			if (linum > 0) {
 				if (newBuf->numrows == 0) {

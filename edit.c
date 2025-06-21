@@ -85,7 +85,7 @@ void editorInsertNewline(struct editorBuffer *bufr, int count) {
 			row = &bufr->row[bufr->cy];
 			row->size = bufr->cx;
 			row->chars[row->size] = '\0';
-			updateRow(row);
+			row->render_valid = 0;
 		}
 		bufr->cy++;
 		bufr->cx = 0;
@@ -639,7 +639,7 @@ void editorKillLine(int count) {
 
 			row->size = E.buf->cx;
 			row->chars[row->size] = '\0';
-			updateRow(row);
+			row->render_valid = 0;
 			E.buf->dirty = 1;
 			editorClearMark();
 		}

@@ -27,25 +27,6 @@ extern struct editorConfig E;
 /* External functions we need */
 extern void die(const char *s);
 
-/* Check if C-g has been pressed (non-blocking) */
-static int check_for_interrupt(void) {
-	fd_set rfds;
-	struct timeval tv;
-
-	FD_ZERO(&rfds);
-	FD_SET(STDIN_FILENO, &rfds);
-	tv.tv_sec = 0;
-	tv.tv_usec = 0;
-
-	if (select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv) > 0) {
-		uint8_t c;
-		if (read(STDIN_FILENO, &c, 1) == 1 && c == CTRL('g')) {
-			return 1;
-		}
-	}
-	return 0;
-}
-
 /*** file i/o ***/
 
 char *editorRowsToString(struct editorBuffer *bufr, int *buflen) {
@@ -72,13 +53,6 @@ void editorOpen(struct editorBuffer *bufr, char *filename) {
 	free(bufr->filename);
 	bufr->filename = xstrdup(filename);
 
-	/* Get file size for progress calculation */
-	struct stat file_stat;
-	long file_size = 0;
-	if (stat(filename, &file_stat) == 0) {
-		file_size = file_stat.st_size;
-	}
-
 	FILE *fp = fopen(filename, "r");
 	if (!fp) {
 		if (errno == ENOENT) {
@@ -92,72 +66,15 @@ void editorOpen(struct editorBuffer *bufr, char *filename) {
 	size_t linecap = 0;
 	ssize_t linelen;
 
-	clock_t start_time = clock();
-	clock_t last_update = clock();
-
-	/* Doesn't handle null bytes */
 	while ((linelen = getline(&line, &linecap, fp)) != -1) {
 		while (linelen > 0 &&
 		       (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
 			linelen--;
 		editorInsertRow(bufr, bufr->numrows, line, linelen);
-
-		/* Check for progress update every 1000 lines */
-		if (bufr->numrows % 1000 == 0) {
-			clock_t now = clock();
-			double elapsed =
-				(double)(now - start_time) / CLOCKS_PER_SEC;
-
-			/* Show progress after 2 seconds, update every 2 seconds */
-			if (elapsed > 2.0 &&
-			    (double)(now - last_update) / CLOCKS_PER_SEC >=
-				    2.0) {
-				int percent = 0;
-				if (file_size > 0) {
-					long current_pos = ftell(fp);
-					percent =
-						(current_pos * 100) / file_size;
-				}
-				double rate = bufr->numrows / elapsed;
-
-				editorSetStatusMessage(
-					"Loading... %3d%% (%6.0f lines/sec, C-g to cancel)",
-					percent, rate);
-
-				if (E.minibuf != NULL) {
-					refreshScreen();
-				} else {
-					fprintf(stderr,
-						"\rLoading... %3d%% (%6.0f lines/sec, C-g to cancel)",
-						percent, rate);
-					fflush(stderr);
-				}
-
-				if (check_for_interrupt()) {
-					free(line);
-					fclose(fp);
-					/* Mark buffer as cancelled by clearing filename */
-					free(bufr->filename);
-					bufr->filename = NULL;
-					editorSetStatusMessage(
-						"Load cancelled at %d%%",
-						percent);
-					return;
-				}
-
-				last_update = now;
-			}
-		}
 	}
 	free(line);
 	fclose(fp);
 	bufr->dirty = 0;
-
-	/* Clear the progress line if we were showing console output */
-	if (E.minibuf == NULL && bufr->numrows > 1000) {
-		fprintf(stderr, "\r\033[K"); /* Clear line */
-		fflush(stderr);
-	}
 }
 
 void editorRevert(struct editorConfig *ed, struct editorBuffer *buf) {
@@ -274,13 +191,6 @@ void findFile(void) {
 	editorOpen(newBuf, (char *)prompt);
 	free(prompt);
 
-	/* Check if load was cancelled */
-	if (newBuf->filename == NULL) {
-		/* Load was cancelled, destroy the buffer */
-		destroyBuffer(newBuf);
-		return;
-	}
-
 	newBuf->next = E_ptr->headbuf;
 	E_ptr->headbuf = newBuf;
 	E_ptr->buf = newBuf;
@@ -293,7 +203,7 @@ void editorInsertFile(struct editorConfig *UNUSED(ed),
 	uint8_t *filename =
 		editorPrompt(buf, "Insert file: %s", PROMPT_FILES, NULL);
 	if (filename == NULL) {
-		return; /* User cancelled */
+		return;
 	}
 
 	FILE *fp = fopen((char *)filename, "r");
@@ -308,10 +218,8 @@ void editorInsertFile(struct editorConfig *UNUSED(ed),
 		return;
 	}
 
-	/* Save current position for undo */
 	int saved_cy = buf->cy;
 
-	/* Create undo entry for the entire operation */
 	newUndo(buf);
 
 	char *line = NULL;
@@ -319,15 +227,12 @@ void editorInsertFile(struct editorConfig *UNUSED(ed),
 	ssize_t linelen;
 	int lines_inserted = 0;
 
-	/* Read and insert lines at current position */
 	while ((linelen = getline(&line, &linecap, fp)) != -1) {
-		/* Remove newline/carriage return */
 		while (linelen > 0 && (line[linelen - 1] == '\n' ||
 				       line[linelen - 1] == '\r')) {
 			linelen--;
 		}
 
-		/* Insert the line */
 		editorInsertRow(buf, saved_cy + lines_inserted, line, linelen);
 		lines_inserted++;
 	}
@@ -335,7 +240,6 @@ void editorInsertFile(struct editorConfig *UNUSED(ed),
 	free(line);
 	fclose(fp);
 
-	/* Move cursor to end of inserted text */
 	if (lines_inserted > 0) {
 		buf->cy = saved_cy + lines_inserted - 1;
 		buf->cx = buf->row[buf->cy].size;
@@ -345,6 +249,5 @@ void editorInsertFile(struct editorConfig *UNUSED(ed),
 			       filename);
 	free(filename);
 
-	/* Mark buffer as dirty */
 	buf->dirty++;
 }

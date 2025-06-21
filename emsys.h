@@ -39,6 +39,7 @@ typedef struct erow {
 	uint8_t *render;
 	int cached_width;
 	int width_valid;
+	int render_valid;
 } erow;
 
 struct editorUndo {
@@ -60,6 +61,7 @@ struct editorBuffer {
 	int cx, cy;
 	int markx, marky;
 	int numrows;
+	int rowcap;
 	int end;
 	int dirty;
 	int special_buffer;
