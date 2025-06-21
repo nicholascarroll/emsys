@@ -25,13 +25,17 @@ void buildScreenCache(struct editorBuffer *buf) {
 		return;
 
 	if (buf->screen_line_cache_size < buf->numrows) {
-		buf->screen_line_cache_size = buf->numrows + 100;
-		int *new_ptr =
-			realloc(buf->screen_line_start,
-				buf->screen_line_cache_size * sizeof(int));
-		if (!new_ptr)
+		size_t new_size = buf->numrows;
+		if (new_size <= SIZE_MAX - 100) {
+			new_size += 100;
+		}
+		if (new_size > SIZE_MAX / sizeof(int)) {
 			return;
-		buf->screen_line_start = new_ptr;
+		}
+		buf->screen_line_cache_size = new_size;
+		buf->screen_line_start =
+			xrealloc(buf->screen_line_start,
+				 buf->screen_line_cache_size * sizeof(int));
 	}
 
 	if (!buf->screen_line_start)
@@ -120,16 +124,35 @@ void updateRow(erow *row) {
 	}
 
 	free(row->render);
-	row->render =
-		malloc(row->size + tabs * (EMSYS_TAB_STOP - 1) + extra + 1);
+	/* Calculate render buffer size, checking for overflow */
+	size_t render_size = row->size;
+	size_t tab_expansion = tabs * (EMSYS_TAB_STOP - 1);
+
+	/* Check for overflow in size calculations */
+	if (render_size > SIZE_MAX - tab_expansion - extra - 1) {
+		/* Line too long to render */
+		row->render = xmalloc(1);
+		row->render[0] = '\0';
+		row->renderwidth = 0;
+		return;
+	}
+
+	render_size += tab_expansion + extra + 1;
+	row->render = xmalloc(render_size);
 	row->renderwidth = 0;
 
 	int idx = 0;
 	for (j = 0; j < row->size; j++) {
+		/* Ensure we have enough space for worst case (control char = 9 bytes) */
+		if ((size_t)(idx + 10) >= render_size) {
+			break;
+		}
+
 		if (row->chars[j] == '\t') {
 			row->renderwidth += EMSYS_TAB_STOP;
 			row->render[idx++] = ' ';
-			while (idx % EMSYS_TAB_STOP != 0)
+			while (idx % EMSYS_TAB_STOP != 0 &&
+			       (size_t)idx < render_size - 1)
 				row->render[idx++] = ' ';
 		} else if (row->chars[j] == 0x7f) {
 			row->renderwidth += 2;
@@ -154,7 +177,7 @@ void updateRow(erow *row) {
 			row->render[idx++] = '[';
 			row->render[idx++] = 'm';
 		} else if (row->chars[j] > 0x7f) {
-			int width = charInStringWidth(row->chars, idx);
+			int width = charInStringWidth(row->chars, j);
 			row->render[idx++] = row->chars[j];
 			row->renderwidth += width;
 		} else if (utf8_isCont(row->chars[j])) {
@@ -172,12 +195,18 @@ void editorInsertRow(struct editorBuffer *bufr, int at, char *s, size_t len) {
 	if (at < 0 || at > bufr->numrows)
 		return;
 
-	bufr->row = realloc(bufr->row, sizeof(erow) * (bufr->numrows + 1));
+	/* Limit line length to prevent memory issues */
+	const size_t MAX_LINE_LENGTH = 1000000; /* 1MB per line */
+	if (len > MAX_LINE_LENGTH) {
+		len = MAX_LINE_LENGTH;
+	}
+
+	bufr->row = xrealloc(bufr->row, sizeof(erow) * (bufr->numrows + 1));
 	memmove(&bufr->row[at + 1], &bufr->row[at],
 		sizeof(erow) * (bufr->numrows - at));
 
 	bufr->row[at].size = len;
-	bufr->row[at].chars = malloc(len + 1);
+	bufr->row[at].chars = xmalloc(len + 1);
 	memcpy(bufr->row[at].chars, s, len);
 	bufr->row[at].chars[len] = '\0';
 
@@ -201,9 +230,14 @@ void editorDelRow(struct editorBuffer *bufr, int at) {
 	if (at < 0 || at >= bufr->numrows)
 		return;
 	freeRow(&bufr->row[at]);
-	memmove(&bufr->row[at], &bufr->row[at + 1],
-		sizeof(erow) * (bufr->numrows - at - 1));
-	bufr->numrows--;
+	if (at == bufr->numrows - 1) {
+		// Last row, no need to memmove
+		bufr->numrows--;
+	} else {
+		memmove(&bufr->row[at], &bufr->row[at + 1],
+			sizeof(erow) * (bufr->numrows - at - 1));
+		bufr->numrows--;
+	}
 	bufr->dirty = 1;
 	invalidateScreenCache(bufr);
 }
@@ -211,7 +245,14 @@ void editorDelRow(struct editorBuffer *bufr, int at) {
 void rowInsertChar(struct editorBuffer *bufr, erow *row, int at, int c) {
 	if (at < 0 || at > row->size)
 		at = row->size;
-	row->chars = realloc(row->chars, row->size + 2);
+
+	/* Prevent lines from growing too large */
+	const size_t MAX_LINE_LENGTH = 1000000; /* 1MB per line */
+	if ((size_t)row->size >= MAX_LINE_LENGTH) {
+		return;
+	}
+
+	row->chars = xrealloc(row->chars, row->size + 2);
 	memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
 	row->size++;
 	row->chars[at] = c;
@@ -225,7 +266,7 @@ void editorRowInsertUnicode(struct editorConfig *ed, struct editorBuffer *bufr,
 			    erow *row, int at) {
 	if (at < 0 || at > row->size)
 		at = row->size;
-	row->chars = realloc(row->chars, row->size + 1 + ed->nunicode);
+	row->chars = xrealloc(row->chars, row->size + 1 + ed->nunicode);
 	memmove(&row->chars[at + ed->nunicode], &row->chars[at],
 		row->size - at + 1);
 	row->size += ed->nunicode;
@@ -236,7 +277,7 @@ void editorRowInsertUnicode(struct editorConfig *ed, struct editorBuffer *bufr,
 
 void rowAppendString(struct editorBuffer *bufr, erow *row, char *s,
 		     size_t len) {
-	row->chars = realloc(row->chars, row->size + len + 1);
+	row->chars = xrealloc(row->chars, row->size + len + 1);
 	memcpy(&row->chars[row->size], s, len);
 	row->size += len;
 	row->chars[row->size] = '\0';
@@ -256,7 +297,7 @@ void rowDelChar(struct editorBuffer *bufr, erow *row, int at) {
 }
 
 struct editorBuffer *newBuffer() {
-	struct editorBuffer *ret = malloc(sizeof(struct editorBuffer));
+	struct editorBuffer *ret = xmalloc(sizeof(struct editorBuffer));
 	ret->indent = 0;
 	ret->markx = -1;
 	ret->marky = -1;
@@ -305,7 +346,7 @@ void editorSwitchToNamedBuffer(struct editorConfig *ed,
 					    "*scratch*";
 	} else {
 		// Find the first buffer that isn't the current one
-		struct editorBuffer *defaultBuffer = ed->firstBuf;
+		struct editorBuffer *defaultBuffer = ed->headbuf;
 		while (defaultBuffer == current && defaultBuffer->next) {
 			defaultBuffer = defaultBuffer->next;
 		}
@@ -339,7 +380,7 @@ void editorSwitchToNamedBuffer(struct editorConfig *ed,
 		// User pressed Enter without typing anything
 		if (defaultBufferName) {
 			// Find the default buffer
-			for (struct editorBuffer *buf = ed->firstBuf;
+			for (struct editorBuffer *buf = ed->headbuf;
 			     buf != NULL; buf = buf->next) {
 				if (buf == current)
 					continue;
@@ -360,7 +401,7 @@ void editorSwitchToNamedBuffer(struct editorConfig *ed,
 			return;
 		}
 	} else {
-		for (struct editorBuffer *buf = ed->firstBuf; buf != NULL;
+		for (struct editorBuffer *buf = ed->headbuf; buf != NULL;
 		     buf = buf->next) {
 			if (buf == current)
 				continue;
@@ -404,7 +445,7 @@ void editorSwitchToNamedBuffer(struct editorConfig *ed,
 void editorNextBuffer(void) {
 	E.buf = E.buf->next;
 	if (E.buf == NULL) {
-		E.buf = E.firstBuf;
+		E.buf = E.headbuf;
 	}
 	for (int i = 0; i < E.nwindows; i++) {
 		if (E.windows[i]->focused) {
@@ -414,15 +455,15 @@ void editorNextBuffer(void) {
 }
 
 void editorPreviousBuffer(void) {
-	if (E.buf == E.firstBuf) {
+	if (E.buf == E.headbuf) {
 		// If we're at the first buffer, go to the last buffer
-		E.buf = E.firstBuf;
+		E.buf = E.headbuf;
 		while (E.buf->next != NULL) {
 			E.buf = E.buf->next;
 		}
 	} else {
 		// Otherwise, go to the previous buffer
-		struct editorBuffer *temp = E.firstBuf;
+		struct editorBuffer *temp = E.headbuf;
 		while (temp->next != E.buf) {
 			temp = temp->next;
 		}
@@ -454,8 +495,8 @@ void editorKillBuffer(void) {
 
 	// Find the previous buffer (if any)
 	struct editorBuffer *prevBuf = NULL;
-	if (E.buf != E.firstBuf) {
-		prevBuf = E.firstBuf;
+	if (E.buf != E.headbuf) {
+		prevBuf = E.headbuf;
 		while (prevBuf->next != E.buf) {
 			prevBuf = prevBuf->next;
 		}
@@ -468,13 +509,13 @@ void editorKillBuffer(void) {
 			if (bufr->next == NULL && prevBuf == NULL) {
 				E.windows[i]->buf = newBuffer();
 				E.windows[i]->buf->filename =
-					stringdup("*scratch*");
+					xstrdup("*scratch*");
 				E.windows[i]->buf->special_buffer = 1;
-				E.firstBuf = E.windows[i]->buf;
-				E.buf = E.firstBuf; // Ensure E.buf is updated
+				E.headbuf = E.windows[i]->buf;
+				E.buf = E.headbuf; // Ensure E.buf is updated
 			} else if (bufr->next == NULL) {
-				E.windows[i]->buf = E.firstBuf;
-				E.buf = E.firstBuf; // Ensure E.buf is updated
+				E.windows[i]->buf = E.headbuf;
+				E.buf = E.headbuf; // Ensure E.buf is updated
 			} else {
 				E.windows[i]->buf = bufr->next;
 				E.buf = bufr->next; // Ensure E.buf is updated
@@ -483,8 +524,8 @@ void editorKillBuffer(void) {
 	}
 
 	// Update the main buffer list
-	if (E.firstBuf == bufr) {
-		E.firstBuf = bufr->next;
+	if (E.headbuf == bufr) {
+		E.headbuf = bufr->next;
 	} else if (prevBuf != NULL) {
 		prevBuf->next = bufr->next;
 	}
