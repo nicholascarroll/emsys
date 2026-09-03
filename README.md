@@ -131,13 +131,14 @@ Shell integration is enabled by default and is disabled at build time with `-DEM
 | **Number lines**       | `cat -n`                         | `Ctrl-u Alt-\|`             |
 | **Word count**         | `wc`                             | `Alt-\|`                    |
 | **Solve math**         | `bc`                             | `Alt-\|` or `Ctrl-u Alt-\|` |
+| **Sum column**         | `paste -sd+ \| bc`                | mark column then `Alt-\|`   |
 | **Format JSON**        | `jq .`                           | `Alt-\|` or `Ctrl-u Alt-\|` |
 | **Find typos**         | `aspell list`                    | `Alt-\|`                    |
 | **Format C code**      | `clang-format`                   | `Ctrl-u Alt-\|`             |
 | **Lint shell script**  | `shellcheck -`                   | `Alt-\|`                    |
 | **Trim whitespace**    | `sed 's/[[:space:]]*$//'`        | `Ctrl-u Alt-\|`             |
 | **De-duplicate lines** | `awk '!seen[$0]++'`              | `Ctrl-u Alt-\|`             |
-
+| **Fetch URL as Markdown** | `xargs curl -sL \| pandoc -f html -t markdown` | mark URL, `Alt-\|` |
 
 ### Shell Drawer
 `Ctrl-x Ctrl-z` suspends `emil` while preserving the current editor screen. This permits shell commands to be executed in the terminal below the editor content, after which editing may be resumed with `fg`.
