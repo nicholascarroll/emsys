@@ -1,3 +1,7 @@
+## [Unreleased]
+- `M-.` looks up Thai word at cursor delimited by U+200B ZERO WIDTH  SPACE
+- `C-g` for pipe to shell improved to not clash with GPG password prompt
+
 ## [0.9.9]
 - Added page up/down to prompt completion windows
 - Palette no shows the Unicode name for the selected symbol

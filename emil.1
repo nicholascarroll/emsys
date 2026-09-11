@@ -405,6 +405,9 @@ Change working directory (editor only).
 .Bl -tag -width Ds
 .It Cm M-.
 Jump to symbol definition (Ctags).
+The symbol is the identifier at point or, in Thai text, the word at
+point, delimited by U+200B ZERO WIDTH SPACE or by any character that
+is not part of a Thai word.
 .It Cm M-,
 Jump back from symbol definition.
 .It Cm M-`

@@ -114,8 +114,8 @@ const PaletteEntry palette[] = {
 	{ 0x1F64F, "PERSON WITH FOLDED HANDS" },			// 🙏
 	{ 0x1F91D, "HANDSHAKE" },					// 🤝
 	{ 0x2705, "WHITE HEAVY CHECK MARK" },				// ✅
-	{ 0x274C,
-	  "CROSS MARK" }, // ❌	{ 0x2795, "HEAVY PLUS SIGN" },					// ➕
+	{ 0x274C, "CROSS MARK" },					// ❌	
+	{ 0x2795, "HEAVY PLUS SIGN" },					// ➕
 	{ 0x2796, "HEAVY MINUS SIGN" },	  // ➖
 	{ 0x1F4DD, "MEMO" },		  // 📝
 	{ 0x1F527, "WRENCH" },		  // 🔧

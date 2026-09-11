@@ -11,6 +11,7 @@
 #include "display.h"
 #include "window.h"
 #include "util.h"
+#include "unicode.h"
 
 /* ---- jump-back stack ---- */
 
@@ -43,20 +44,76 @@ static int isIdentChar(uint8_t c) {
 	       (c >= '0' && c <= '9') || c == '_';
 }
 
-static char *wordAtPoint(void) {
+/* Thai characters that belong to a word for tag lookup: consonants,
+ * vowels, tone and other combining marks, and PAIYANNOI (the
+ * abbreviation mark in e.g. "กรุงเทพฯ").  Everything else ends a word:
+ * U+200B ZERO WIDTH SPACE, Thai digits, MAI YAMOK (repetition),
+ * FONGMAN, ANGKHANKHU, KHOMUT, the baht sign, and all non-Thai text.
+ * This must agree with the token definition in n-thai-vocab.sh, which
+ * writes the tags file these words are looked up in. */
+static int isThaiWordCP(uint32_t cp) {
+	return (cp >= 0x0E01 && cp <= 0x0E3A) ||
+	       (cp >= 0x0E40 && cp <= 0x0E45) ||
+	       (cp >= 0x0E47 && cp <= 0x0E4E);
+}
+
+/* Byte offset of the codepoint that ends just before 'i'. */
+static int prevCPStart(const erow *row, int i) {
+	do {
+		i--;
+	} while (i > 0 && utf8_isCont(row->chars[i]));
+	return i;
+}
+
+static int isThaiWordAt(const erow *row, int i) {
+	if (i < 0 || i >= row->size || row->chars[i] < 0x80)
+		return 0;
+	return isThaiWordCP(utf8Decode(row->chars, i));
+}
+
+/* Thai word containing the cursor, or the one just before it.  Thai
+ * is written without spaces, so the word is bounded by U+200B (see
+ * n-thai-zw.sh) or by any non-word character. Returns -1 if the
+ * cursor is not on or just after a Thai word character. */
+static int thaiWordBounds(const erow *row, int cx, int *out_start,
+			  int *out_end) {
+	if (!isThaiWordAt(row, cx)) {
+		if (cx > 0 && isThaiWordAt(row, prevCPStart(row, cx)))
+			cx = prevCPStart(row, cx);
+		else
+			return -1;
+	}
+	int start = cx, end = cx;
+	while (start > 0 && isThaiWordAt(row, prevCPStart(row, start)))
+		start = prevCPStart(row, start);
+	while (end < row->size && isThaiWordAt(row, end))
+		end += utf8_nBytes(row->chars[end]);
+	if (end > row->size)
+		end = row->size; /* truncated sequence at end of row */
+	*out_start = start;
+	*out_end = end;
+	return 0;
+}
+
+char *ctagsWordAtPoint(void) {
 	erow *row = &E.buf->row[E.buf->cy];
 	int cx = E.buf->cx;
+	int start, end;
+	if (thaiWordBounds(row, cx, &start, &end) == 0)
+		goto copy;
 	if (cx >= row->size || !isIdentChar(row->chars[cx])) {
 		if (cx > 0 && isIdentChar(row->chars[cx - 1]))
 			cx--;
 		else
 			return NULL;
 	}
-	int start = cx, end = cx;
+	start = cx;
+	end = cx;
 	while (start > 0 && isIdentChar(row->chars[start - 1]))
 		start--;
 	while (end < row->size && isIdentChar(row->chars[end]))
 		end++;
+copy:;
 	char *w = xmalloc(end - start + 1);
 	memcpy(w, &row->chars[start], end - start);
 	w[end - start] = '\0';
@@ -209,7 +266,7 @@ static int ctagsLookup(const char *sym, char *out_file, size_t filesz,
 /* ---- public API ---- */
 
 void ctagsJump(void) {
-	char *sym = wordAtPoint();
+	char *sym = ctagsWordAtPoint();
 	if (!sym) {
 		setStatusMessage("No symbol at point");
 		return;

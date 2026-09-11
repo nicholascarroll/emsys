@@ -26,6 +26,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 
 #include "buffer.h"
@@ -51,6 +52,115 @@ static int pipe_intr_fd = STDIN_FILENO;
 /* 1 if the most recent transformerPipeCmd run was cancelled (as
  * opposed to failing).  Read by pipeCommandCaptureIntr. */
 static int pipe_last_canceled;
+
+/* 1 while the editor (not a test) is running a command, so the pump
+ * may write status messages to the screen. */
+static int pipe_interactive;
+
+/* The terminal while a command runs.
+ *
+ * emil used to watch the terminal itself for C-g, reading and
+ * discarding every other key.  That breaks any program which prompts
+ * on the terminal from outside the child's process group -- gpg's
+ * pinentry is started by gpg-agent, not by the command -- because
+ * emil and the prompt then race for each keystroke and emil throws
+ * away the ones it wins.
+ *
+ * So emil stops reading the terminal for the duration.  Instead the
+ * tty driver turns C-g into SIGINT (ISIG on, VINTR = C-g), and the
+ * handler writes a C-g down a self-pipe that the pump watches in
+ * place of the terminal, so the three-stage escalation in
+ * pumpSubprocessIO is unchanged.  The child is in its own process
+ * group, so the tty's SIGINT reaches emil only, never the child
+ * directly.  QUIT and SUSP (and BSD's delayed suspend) are disabled
+ * so that C-\ and C-z cannot stop or kill emil mid-command.
+ *
+ * Keys typed during a command are discarded afterwards, as before. */
+static int intr_pipe[2] = { -1, -1 };
+
+static void handleCommandSigint(int sig) {
+	(void)sig;
+	int saved = errno;
+	uint8_t g = 0x07;
+	IGNORE_RETURN(write(intr_pipe[1], &g, 1));
+	errno = saved;
+}
+
+struct cmd_terminal {
+	struct termios saved;
+	struct sigaction old_int;
+	int active;
+};
+
+static void closeIntrPipe(void) {
+	for (int i = 0; i < 2; i++) {
+		if (intr_pipe[i] >= 0)
+			close(intr_pipe[i]);
+		intr_pipe[i] = -1;
+	}
+}
+
+/* Returns the fd to watch for C-g, or -1 if the terminal could not be
+ * handed over (the caller then falls back to reading it directly). */
+static int releaseTerminal(struct cmd_terminal *ct) {
+	ct->active = 0;
+	if (pipe(intr_pipe) == -1) {
+		intr_pipe[0] = intr_pipe[1] = -1;
+		return -1;
+	}
+	for (int i = 0; i < 2; i++) {
+		fcntl(intr_pipe[i], F_SETFD, FD_CLOEXEC);
+		fcntl(intr_pipe[i], F_SETFL, O_NONBLOCK);
+	}
+	if (tcgetattr(STDIN_FILENO, &ct->saved) == -1) {
+		closeIntrPipe();
+		return -1;
+	}
+
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = handleCommandSigint;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0; /* no SA_RESTART: let select() see EINTR */
+	if (sigaction(SIGINT, &sa, &ct->old_int) == -1) {
+		closeIntrPipe();
+		return -1;
+	}
+
+#ifdef _POSIX_VDISABLE
+	cc_t off = _POSIX_VDISABLE;
+#else
+	long v = fpathconf(STDIN_FILENO, _PC_VDISABLE);
+	cc_t off = (cc_t)(v == -1 ? 0 : v);
+#endif
+	struct termios t = ct->saved;
+	t.c_lflag |= ISIG;
+	t.c_cc[VINTR] = 0x07; /* C-g */
+	t.c_cc[VQUIT] = off;
+	t.c_cc[VSUSP] = off;
+#ifdef VDSUSP
+	t.c_cc[VDSUSP] = off;
+#endif
+	if (tcsetattr(STDIN_FILENO, TCSANOW, &t) == -1) {
+		sigaction(SIGINT, &ct->old_int, NULL);
+		closeIntrPipe();
+		return -1;
+	}
+	ct->active = 1;
+	return intr_pipe[0];
+}
+
+static void reclaimTerminal(struct cmd_terminal *ct) {
+	if (!ct->active)
+		return;
+	/* Turn ISIG off before restoring the old SIGINT disposition, so
+	 * no C-g can arrive while SIGINT is at its default (fatal). */
+	IGNORE_RETURN(tcsetattr(STDIN_FILENO, TCSANOW, &ct->saved));
+	IGNORE_RETURN(tcflush(STDIN_FILENO, TCIFLUSH)); /* drop type-ahead */
+	sigaction(SIGINT, &ct->old_int, NULL);
+	closeIntrPipe();
+	ct->active = 0;
+}
 
 /* Pump 'input' into sp's stdin while draining its stdout into 'out'
  * and discarding its stderr, using select() so neither side can
@@ -149,7 +259,7 @@ static int pumpSubprocessIO(struct subprocess_s *sp, uint8_t *input,
 					cancel_stage++;
 					if (cancel_stage == 1) {
 						subprocess_signal(sp, SIGINT);
-						if (intr_fd == STDIN_FILENO) {
+						if (pipe_interactive) {
 							setStatusMessage(
 								"Interrupt sent — C-g again to force kill.");
 							refreshScreen();
@@ -217,8 +327,18 @@ static uint8_t *transformerPipeCmd(uint8_t *input) {
 	 * pipe_intr_fd (the terminal in the editor) is watched so C-g
 	 * cancels a long-running command without losing the session. */
 	struct dbuf d = DBUF_INIT;
+	struct cmd_terminal ct = { .active = 0 };
+	int intr_fd = pipe_intr_fd;
+	if (intr_fd == STDIN_FILENO) {
+		int fd = releaseTerminal(&ct);
+		if (fd >= 0)
+			intr_fd = fd;
+	}
+	pipe_interactive = (pipe_intr_fd == STDIN_FILENO);
 	int canceled =
-		(pumpSubprocessIO(&subprocess, input, &d, pipe_intr_fd) != 0);
+		(pumpSubprocessIO(&subprocess, input, &d, intr_fd) != 0);
+	pipe_interactive = 0;
+	reclaimTerminal(&ct);
 
 	pipe_last_canceled = canceled;
 	if (canceled) {

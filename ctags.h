@@ -29,4 +29,9 @@ int findTagsDir(char *out_dir, size_t dirsz);
 int resolveTagPath(const char *tagsdir, const char *tagpath, char *out,
 		   size_t outsz);
 
+/* The symbol at point for a tags lookup, or NULL if there is none:
+ * an ASCII identifier, or a Thai word bounded by U+200B ZERO WIDTH
+ * SPACE or non-word characters.  Caller frees.  Exposed for testing. */
+char *ctagsWordAtPoint(void);
+
 #endif /* EMIL_CTAGS_H */
