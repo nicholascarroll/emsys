@@ -64,6 +64,10 @@ static int prevCPStart(const erow *row, int i) {
 	return i;
 }
 
+static int isZeroWidth(uint32_t cp) {
+	return cp == 0x200B || cp == 0x200C || cp == 0x200D || cp == 0xFEFF;
+}
+
 static int isThaiWordAt(const erow *row, int i) {
 	if (i < 0 || i >= row->size || row->chars[i] < 0x80)
 		return 0;
@@ -76,6 +80,14 @@ static int isThaiWordAt(const erow *row, int i) {
  * cursor is not on or just after a Thai word character. */
 static int thaiWordBounds(const erow *row, int cx, int *out_start,
 			  int *out_end) {
+	/* A zero-width separator takes a byte offset but no screen cell,
+	 * so a block cursor drawn on the following character can leave cx
+	 * sitting on the separator.  Step past it before the backward
+	 * fallback, or M-. looks up the preceding word. */
+	while (cx < row->size && row->chars[cx] >= 0x80 &&
+	       isZeroWidth(utf8Decode(row->chars, cx)))
+		cx += utf8_nBytes(row->chars[cx]);
+
 	if (!isThaiWordAt(row, cx)) {
 		if (cx > 0 && isThaiWordAt(row, prevCPStart(row, cx)))
 			cx = prevCPStart(row, cx);
