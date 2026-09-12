@@ -53,8 +53,7 @@ static int isIdentChar(uint8_t c) {
  * writes the tags file these words are looked up in. */
 static int isThaiWordCP(uint32_t cp) {
 	return (cp >= 0x0E01 && cp <= 0x0E3A) ||
-	       (cp >= 0x0E40 && cp <= 0x0E45) ||
-	       (cp >= 0x0E47 && cp <= 0x0E4E);
+	       (cp >= 0x0E40 && cp <= 0x0E45) || (cp >= 0x0E47 && cp <= 0x0E4E);
 }
 
 /* Byte offset of the codepoint that ends just before 'i'. */

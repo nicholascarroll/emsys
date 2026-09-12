@@ -335,8 +335,7 @@ static uint8_t *transformerPipeCmd(uint8_t *input) {
 			intr_fd = fd;
 	}
 	pipe_interactive = (pipe_intr_fd == STDIN_FILENO);
-	int canceled =
-		(pumpSubprocessIO(&subprocess, input, &d, intr_fd) != 0);
+	int canceled = (pumpSubprocessIO(&subprocess, input, &d, intr_fd) != 0);
 	pipe_interactive = 0;
 	reclaimTerminal(&ct);
 
